@@ -196,3 +196,21 @@
 	<richedit.h>
 	"resource.h"
 
+1684352485 source:d:\wpamp 1.0\resource.rc
+	<windows.h>
+	<richedit.h>
+	"resource.h"
+
+1682101013 d:\wpamp 1.0\resource.h
+
+1752955887 source:d:\wpamp 1.0\main.cpp
+	<fstream>
+	<sstream>
+	<map>
+	<dirent.h>
+	<thread>
+	<winsock2.h>
+	<windows.h>
+	<tlhelp32.h>
+	"resource.h"
+

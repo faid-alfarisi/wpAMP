@@ -1,5 +1,4 @@
 #include <windows.h>
-#include <richedit.h>
 #include "resource.h"
 
 
@@ -18,7 +17,7 @@ MAINICON ICON "icon.ico"
 //
 DLG_MAIN DIALOG 0, 0, 180, 60
 STYLE DS_CENTER | WS_CAPTION | WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX
-CAPTION "wpAMP 1.0"
+CAPTION "wpAMP 1.1"
 FONT 8, "Ms Shell Dlg"
 {
     PUSHBUTTON      "Start All", 0, 6, 42, 52, 12, WS_GROUP | WS_TABSTOP

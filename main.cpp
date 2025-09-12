@@ -6,6 +6,8 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <tlhelp32.h>
+#include <ctime>
+#include <sys/stat.h>
 #include "resource.h"
 
 #define APPWM_ICONNOTIFY (WM_APP + 1)
@@ -15,8 +17,8 @@ HINSTANCE hInst;
 HWND mainDlg;
 NOTIFYICONDATA nid;
 HANDLE hMutexHandle;
-SHELLEXECUTEINFOA execApache = {};
-SHELLEXECUTEINFOA execMySQL = {};
+PROCESS_INFORMATION execApache = {};
+PROCESS_INFORMATION execMySQL = {};
 
 std::ifstream fi;
 std::ofstream fo;
@@ -124,6 +126,14 @@ std::map<std::string, std::string> GetReplaceText()
         {"{TMP_PATH}", slashPath + "/tmp"},
         {"{WWW_PATH}", slashPath + "/www"}
     };
+}
+
+std::string GetCurrentTimestamp()
+{
+    time_t now = time(nullptr);
+    char buf[64];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    return buf;
 }
 
 void ReadWriteSettings(bool rewrite = false)
@@ -236,6 +246,21 @@ bool RewriteAppConfig(std::string fromFile, std::string toFile)
     fo.close();
     fi.close();
     return true;
+}
+
+void AppendToLog(const std::string& filename, const std::string& capturedOutput)
+{
+    struct _stat fileStat;
+    bool fileExistsAndNotEmpty = (_stat(filename.c_str(), &fileStat) == 0 && fileStat.st_size > 0);
+
+    std::ofstream log(filename, std::ios::app);
+    if (fileExistsAndNotEmpty) {
+        log << "\n"; // Separate with newline if previous content exists
+    }
+
+    log << "---- Error at " << GetCurrentTimestamp() << " ----\n";
+    log << capturedOutput << "\n";
+    log.close();
 }
 
 bool CheckIpAddress(std::string ipAddress)
@@ -368,26 +393,68 @@ void StartServer()
 
     if (!nextStep) return;
 
-    execApache = {};
-    execApache.cbSize = sizeof(SHELLEXECUTEINFOA);
-    execApache.lpFile = apacheExe.c_str();
-    execApache.fMask = SEE_MASK_NOCLOSEPROCESS;
-    execApache.hwnd = NULL;
-    execApache.lpVerb = NULL;
-    execApache.lpParameters = NULL;
-    execApache.lpDirectory = apachePath.c_str();
-    execApache.nShow = SW_HIDE;
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    HANDLE hRead = NULL, hWrite = NULL;
 
-    ShellExecuteExA(&execApache);
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+        MessageBoxA(mainDlg, "Failed to create pipe.", "Error", MB_OK | MB_ICONERROR);
+        return;
+    }
 
-    if (WaitForSingleObject(execApache.hProcess, 1000) == WAIT_TIMEOUT)
-    {
+    STARTUPINFOA si = { 0 };
+
+    si.cb = sizeof(si);
+    si.dwFlags |= STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = hWrite;
+    si.hStdError = hWrite;
+
+    std::string cmdLine = "\"" + apacheExe + "\"";
+
+    BOOL success = CreateProcessA(
+        NULL,
+        (LPSTR)cmdLine.c_str(),
+        NULL, NULL,
+        TRUE,
+        0,
+        NULL,
+        apachePath.c_str(),
+        &si,
+        &execApache
+    );
+
+    CloseHandle(hWrite);
+
+    DWORD waitResult = WaitForSingleObject(execApache.hProcess, 1000);
+    DWORD exitCode = 0;
+    GetExitCodeProcess(execApache.hProcess, &exitCode);
+
+    if (waitResult == WAIT_OBJECT_0 && exitCode != 0) {
+        char buffer[512];
+        DWORD bytesRead;
+        std::string output;
+        std::string msg = "Error starting Apache.";
+
+        while (ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            buffer[bytesRead] = '\0';
+            output += buffer;
+        }
+
+        if (!output.empty()) {
+            AppendToLog(appPath + "\\apache_error.txt", output);
+            msg += " Check \"apache_error.txt\" for details.";
+        }
+
+
+        MessageBoxA(mainDlg, msg.c_str(), "Error", MB_OK | MB_ICONERROR);
+        CloseHandle(hRead);
+        if (execApache.hProcess) CloseHandle(execApache.hProcess);
+        if (execApache.hThread) CloseHandle(execApache.hThread);
+        execApache = {};
+    } else {
+        CloseHandle(hRead);
         isServerRun = true;
         std::thread(HandleClosed, std::ref(execApache.hProcess), std::ref(isServerRun)).detach();
-    }
-    else
-    {
-        MessageBoxA(mainDlg, std::string("Error starting Apache.").c_str(), "Error", MB_OK | MB_ICONERROR);
     }
 }
 
@@ -399,7 +466,9 @@ void StopServer()
     {
         DWORD pid = GetProcessId(execApache.hProcess);
         KillProcessTree(pid);
-        CloseHandle(execApache.hProcess);
+        if (execApache.hProcess) CloseHandle(execApache.hProcess);
+        if (execApache.hThread) CloseHandle(execApache.hThread);
+        execApache = {};
     }
 
     isServerRun = false;
@@ -443,26 +512,67 @@ void StartDatabase()
 
     if (!nextStep) return;
 
-    execMySQL = {};
-    execMySQL.cbSize = sizeof(SHELLEXECUTEINFOA);
-    execMySQL.lpFile = mysqlExe.c_str();
-    execMySQL.fMask = SEE_MASK_NOCLOSEPROCESS;
-    execMySQL.hwnd = NULL;
-    execMySQL.lpVerb = NULL;
-    execMySQL.lpParameters = NULL;
-    execMySQL.lpDirectory = mysqlPath.c_str();
-    execMySQL.nShow = SW_HIDE;
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    HANDLE hRead = NULL, hWrite = NULL;
 
-    ShellExecuteExA(&execMySQL);
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+        MessageBoxA(mainDlg, "Failed to create pipe.", "Error", MB_OK | MB_ICONERROR);
+        return;
+    }
 
-    if (WaitForSingleObject(execMySQL.hProcess, 1000) == WAIT_TIMEOUT)
-    {
+    STARTUPINFOA si = { 0 };
+
+    si.cb = sizeof(si);
+    si.dwFlags |= STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = hWrite;
+    si.hStdError = hWrite;
+
+    std::string cmdLine = "\"" + mysqlExe + "\" --console";
+
+    BOOL success = CreateProcessA(
+        NULL,
+        (LPSTR)cmdLine.c_str(),
+        NULL, NULL,
+        TRUE,
+        0,
+        NULL,
+        mysqlPath.c_str(),
+        &si,
+        &execMySQL
+    );
+
+    CloseHandle(hWrite);
+
+    DWORD waitResult = WaitForSingleObject(execMySQL.hProcess, 1000);
+    DWORD exitCode = 0;
+    GetExitCodeProcess(execMySQL.hProcess, &exitCode);
+
+    if (waitResult == WAIT_OBJECT_0 && exitCode != 0) {
+        char buffer[512];
+        DWORD bytesRead;
+        std::string output;
+        std::string msg = "Error starting MySQL.";
+
+        while (ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            buffer[bytesRead] = '\0';
+            output += buffer;
+        }
+
+        if (!output.empty()) {
+            AppendToLog(appPath + "\\mysql_error.txt", output);
+            msg += " Check \"mysql_error.txt\" for details.";
+        }
+
+        MessageBoxA(mainDlg, msg.c_str(), "Error", MB_OK | MB_ICONERROR);
+        CloseHandle(hRead);
+        if (execMySQL.hProcess) CloseHandle(execMySQL.hProcess);
+        if (execMySQL.hThread) CloseHandle(execMySQL.hThread);
+        execMySQL = {};
+    } else {
+        CloseHandle(hRead);
         isDatabaseRun = true;
         std::thread(HandleClosed, std::ref(execMySQL.hProcess), std::ref(isDatabaseRun)).detach();
-    }
-    else
-    {
-        MessageBoxA(mainDlg, "Error starting MySQL.", "Error", MB_OK | MB_ICONERROR);
     }
 }
 
@@ -474,7 +584,9 @@ void StopDatabase()
     {
         DWORD pid = GetProcessId(execMySQL.hProcess);
         KillProcessTree(pid);
-        CloseHandle(execMySQL.hProcess);
+        if (execMySQL.hProcess) CloseHandle(execMySQL.hProcess);
+        if (execMySQL.hThread) CloseHandle(execMySQL.hThread);
+        execMySQL = {};
     }
 
     isDatabaseRun = false;
