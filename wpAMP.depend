@@ -1,0 +1,198 @@
+# depslib dependency file v1.0
+1554222851 source:c:\users\faid alfarisi\desktop\pwamp\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<windows.h>
+	<commctrl.h>
+	<commdlg.h>
+	<stdio.h>
+	"resource.h"
+
+1553883884 c:\users\faid alfarisi\desktop\pwamp\resource.h
+
+1554222558 source:c:\users\faid alfarisi\desktop\pwamp\resource.rc
+	<windows.h>
+	<commctrl.h>
+	<richedit.h>
+	"resource.h"
+
+1553526910 source:c:\users\faid alfarisi\desktop\pwamp\info.rc
+	<windows.h>
+	<commctrl.h>
+	<richedit.h>
+	"resource.h"
+
+1553873134 source:c:\users\faid alfarisi\desktop\pwamp\icon.rc
+
+1554223200 source:d:\c++\encrypt decrypt binary\pwamp 1.7\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<windows.h>
+	<commctrl.h>
+	<commdlg.h>
+	<stdio.h>
+	"resource.h"
+
+1553883884 d:\c++\encrypt decrypt binary\pwamp 1.7\resource.h
+
+1554223200 source:d:\c++\encrypt decrypt binary\pwamp 1.7\resource.rc
+	<windows.h>
+	<commctrl.h>
+	<richedit.h>
+	"resource.h"
+
+1554223200 source:c:\users\faid\desktop\pwamp\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<windows.h>
+	<commctrl.h>
+	<commdlg.h>
+	<stdio.h>
+	"resource.h"
+
+1553883884 c:\users\faid\desktop\pwamp\resource.h
+
+1554223200 source:c:\users\faid\desktop\pwamp\resource.rc
+	<windows.h>
+	<commctrl.h>
+	<richedit.h>
+	"resource.h"
+
+1680276058 source:c:\users\faid\desktop\bluetooth\pwamp\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<windows.h>
+	<commctrl.h>
+	<commdlg.h>
+	<stdio.h>
+	<shellapi.h>
+	"resource.h"
+
+1553883884 c:\users\faid\desktop\bluetooth\pwamp\resource.h
+
+1680196050 source:c:\users\faid\desktop\bluetooth\pwamp\resource.rc
+	<windows.h>
+	<commctrl.h>
+	<richedit.h>
+	"resource.h"
+
+1680445235 source:c:\users\faid\desktop\bluetooth\pwamp\pwamp 1.0\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<dirent.h>
+	<windows.h>
+	<map>
+	<commctrl.h>
+	<commdlg.h>
+	<stdio.h>
+	<shellapi.h>
+	"resource.h"
+
+1553883884 c:\users\faid\desktop\bluetooth\pwamp\pwamp 1.0\resource.h
+
+1680419885 source:c:\users\faid\desktop\bluetooth\pwamp\pwamp 1.0\resource.rc
+	<windows.h>
+	<richedit.h>
+	"resource.h"
+
+1680898893 source:c:\users\faid\desktop\data\pwamp\pwamp 1.0\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<map>
+	<dirent.h>
+	<windows.h>
+	"resource.h"
+
+1553883884 c:\users\faid\desktop\data\pwamp\pwamp 1.0\resource.h
+
+1680894632 source:c:\users\faid\desktop\data\pwamp\pwamp 1.0\resource.rc
+	<windows.h>
+	<richedit.h>
+	"resource.h"
+
+1682612923 source:c:\users\faid\desktop\data\pwanmp\pwanmp 1.0\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<map>
+	<dirent.h>
+	<thread>
+	<winsock2.h>
+	<windows.h>
+	<tlhelp32.h>
+	"resource.h"
+
+1682101013 c:\users\faid\desktop\data\pwanmp\pwanmp 1.0\resource.h
+
+1682184060 source:c:\users\faid\desktop\data\pwanmp\pwanmp 1.0\resource.rc
+	<windows.h>
+	<richedit.h>
+	"resource.h"
+
+1681840833 source:c:\users\faid\desktop\data\pwanmp\pwanmp-1.0\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<map>
+	<dirent.h>
+	<winsock2.h>
+	<windows.h>
+	"resource.h"
+
+1553883884 c:\users\faid\desktop\data\pwanmp\pwanmp-1.0\resource.h
+
+1681328029 source:c:\users\faid\desktop\data\pwanmp\pwanmp-1.0\resource.rc
+	<windows.h>
+	<richedit.h>
+	"resource.h"
+
+1682627085 source:c:\users\faid\desktop\data\wpanmp\wpanmp 1.0\resource.rc
+	<windows.h>
+	<richedit.h>
+	"resource.h"
+
+1682101013 c:\users\faid\desktop\data\wpanmp\wpanmp 1.0\resource.h
+
+1682627085 source:c:\users\faid\desktop\data\wpanmp 1.0\resource.rc
+	<windows.h>
+	<richedit.h>
+	"resource.h"
+
+1682101013 c:\users\faid\desktop\data\wpanmp 1.0\resource.h
+
+1682888662 source:c:\users\faid\desktop\data\wpanmp 1.0\main.cpp
+	<fstream>
+	<iostream>
+	<sstream>
+	<map>
+	<dirent.h>
+	<thread>
+	<winsock2.h>
+	<windows.h>
+	<tlhelp32.h>
+	"resource.h"
+
+1684359586 source:c:\users\faid\desktop\data\wpamp 1.0\main.cpp
+	<fstream>
+	<sstream>
+	<map>
+	<dirent.h>
+	<thread>
+	<winsock2.h>
+	<windows.h>
+	<tlhelp32.h>
+	"resource.h"
+
+1682101013 c:\users\faid\desktop\data\wpamp 1.0\resource.h
+
+1684352485 source:c:\users\faid\desktop\data\wpamp 1.0\resource.rc
+	<windows.h>
+	<richedit.h>
+	"resource.h"
+

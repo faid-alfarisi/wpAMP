@@ -1,0 +1,53 @@
+#include <windows.h>
+#include <richedit.h>
+#include "resource.h"
+
+
+
+//
+// Manifest resources
+//
+LANGUAGE 0, SUBLANG_NEUTRAL
+1 RT_MANIFEST ".\\manifest.xml"
+MAINICON ICON "icon.ico"
+
+
+
+//
+// Main dialog resources
+//
+DLG_MAIN DIALOG 0, 0, 180, 60
+STYLE DS_CENTER | WS_CAPTION | WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX
+CAPTION "wpAMP 1.0"
+FONT 8, "Ms Shell Dlg"
+{
+    PUSHBUTTON      "Start All", 0, 6, 42, 52, 12, WS_GROUP | WS_TABSTOP
+    PUSHBUTTON      "Start Server", 1, 64, 42, 52, 12, WS_GROUP | WS_TABSTOP
+    PUSHBUTTON      "Start MySQL", 2, 122, 42, 52, 12, WS_GROUP | WS_TABSTOP
+    LTEXT           "Server", IDC_STATIC, 6, 8, 28, 8, SS_NOPREFIX
+    COMBOBOX        3, 36, 6, 60, 12, CBS_DROPDOWNLIST | CBS_HASSTRINGS
+    PUSHBUTTON      "...", 4, 102, 6, 14, 12, WS_GROUP | WS_TABSTOP
+    PUSHBUTTON      "Config", 5, 122, 6, 32, 12, WS_GROUP | WS_TABSTOP
+    PUSHBUTTON      "...", 6, 160, 6, 14, 12, WS_GROUP | WS_TABSTOP
+    LTEXT           "MySQL", IDC_STATIC, 6, 26, 28, 8, SS_NOPREFIX
+    COMBOBOX        7, 36, 24, 80, 12, CBS_DROPDOWNLIST | CBS_HASSTRINGS
+    PUSHBUTTON      "Config", 8, 122, 24, 32, 12, WS_GROUP | WS_TABSTOP
+    PUSHBUTTON      "...", 9, 160, 24, 14, 12, WS_GROUP | WS_TABSTOP
+}
+
+
+
+//
+// Settings dialog resources
+//
+DLG_CONF DIALOG 0, 0, 150, 42
+STYLE DS_CENTER | DS_MODALFRAME | WS_CAPTION | WS_VISIBLE | WS_SYSMENU
+FONT 8, "Ms Shell Dlg"
+{
+    PUSHBUTTON      "Save", 0, 6, 24, 66, 12, WS_GROUP | WS_TABSTOP
+    PUSHBUTTON      "Cancel", 1, 78, 24, 66, 12, WS_GROUP | WS_TABSTOP
+    LTEXT           "Host", IDC_STATIC, 6, 8, 20, 8, SS_NOPREFIX
+    EDITTEXT        2, 28, 6, 64, 12, ES_LEFT | ES_AUTOHSCROLL | WS_BORDER | WS_GROUP | WS_TABSTOP
+    CTEXT           "Port", IDC_STATIC, 94, 8, 20, 8, SS_NOPREFIX
+    EDITTEXT        3, 116, 6, 28, 12, ES_LEFT | ES_NUMBER | ES_AUTOHSCROLL | WS_BORDER | WS_GROUP | WS_TABSTOP
+}
