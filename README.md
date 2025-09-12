@@ -21,3 +21,7 @@ Download Apache/PHP/MySQL in ZIP format and place it in "bin" folder
    - {MYSQL_PORT} = will be replaced with server port (can be configured in the wpAMP GUI)
    - {TMP_PATH} = will be replaced with tmp path
    - {WWW_PATH} = will be replaced with www path (your php files here)
+
+## Download Usable Bulild
+
+[Version 1.1](https://1drv.ms/u/c/06c4ce7d42e23ed5/EY_Nq1maQYxEvPcRQj1nFLMBVdJ5eo6ORbAWU5E7GirD1Q?e=I1KDWf)
