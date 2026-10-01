@@ -31,17 +31,17 @@ const COLORREF COLOR_ERROR = RGB(200, 0, 0);   // Red
 const int START_ALL_BTN     = ID_START_ALL_BTN;      // 0
 const int START_SERVER_BTN  = ID_START_SERVER_BTN;   // 1
 const int START_MYSQL_BTN   = ID_START_MYSQL_BTN;    // 2
-const int CLEAR_LOG_BTN     = ID_CLEAR_LOG_BTN;      // 3
-const int BROWSE_WWW_BTN    = ID_BROWSE_WWW_BTN;     // 4
-const int TERMINAL_BTN      = ID_TERMINAL_BTN;       // 5
-const int PHP_DROPDOWN      = ID_PHP_DROPDOWN;       // 6
-const int PHP_CONF_BTN      = ID_PHP_CONF_BTN;       // 7
-const int APACHE_PORT_BTN   = ID_APACHE_PORT_BTN;    // 8
-const int APACHE_CONF_BTN   = ID_APACHE_CONF_BTN;    // 9
-const int MYSQL_DROPDOWN    = ID_MYSQL_DROPDOWN;     // 10
-const int MYSQL_PORT_BTN    = ID_MYSQL_PORT_BTN;     // 11
-const int MYSQL_CONF_BTN    = ID_MYSQL_CONF_BTN;     // 12
-const int LOG_BOX           = ID_LOG_BOX;            // 13
+const int LOG_BOX           = ID_LOG_BOX;            // 3
+const int CLEAR_LOG_BTN     = ID_CLEAR_LOG_BTN;      // 4
+const int BROWSE_WWW_BTN    = ID_BROWSE_WWW_BTN;     // 5
+const int TERMINAL_BTN      = ID_TERMINAL_BTN;       // 6
+const int PHP_DROPDOWN      = ID_PHP_DROPDOWN;       // 7
+const int PHP_CONF_BTN      = ID_PHP_CONF_BTN;       // 8
+const int APACHE_PORT_BTN   = ID_APACHE_PORT_BTN;    // 9
+const int APACHE_CONF_BTN   = ID_APACHE_CONF_BTN;    // 10
+const int MYSQL_DROPDOWN    = ID_MYSQL_DROPDOWN;     // 11
+const int MYSQL_PORT_BTN    = ID_MYSQL_PORT_BTN;     // 12
+const int MYSQL_CONF_BTN    = ID_MYSQL_CONF_BTN;     // 13
 
 std::map<int, std::string> binPath = {
     {PHP_DROPDOWN, "php"},
@@ -315,9 +315,15 @@ void EnableDisableItem(bool enabled, const char *label = "", int item = 0)
 {
     if (!enabled)
     {
-        for (int i = 0; i <= MYSQL_CONF_BTN; i++)
+        const int actionControls[] = {
+            START_ALL_BTN, START_SERVER_BTN, START_MYSQL_BTN,
+            CLEAR_LOG_BTN, BROWSE_WWW_BTN, TERMINAL_BTN,
+            PHP_DROPDOWN, PHP_CONF_BTN, APACHE_PORT_BTN, APACHE_CONF_BTN,
+            MYSQL_DROPDOWN, MYSQL_PORT_BTN, MYSQL_CONF_BTN
+        };
+        for (int id : actionControls)
         {
-            EnableWindow(GetDlgItem(mainDlg, i), FALSE);
+            EnableWindow(GetDlgItem(mainDlg, id), FALSE);
         }
         SendDlgItemMessageA(mainDlg, START_ALL_BTN, WM_SETTEXT, 0, (LPARAM)label);
         SendDlgItemMessageA(mainDlg, item, WM_SETTEXT, 0, (LPARAM)label);
