@@ -40,6 +40,7 @@
 			<Add library="kernel32" />
 			<Add library="comctl32" />
 			<Add library="ws2_32" />
+			<Add library="iphlpapi" />
 		</Linker>
 		<Unit filename="main.cpp" />
 		<Unit filename="manifest.xml" />

@@ -214,3 +214,25 @@
 	<tlhelp32.h>
 	"resource.h"
 
+1790879512 source:d:\wpamp\www\wpamp\resource.rc
+	<windows.h>
+	"resource.h"
+
+1790879538 d:\wpamp\www\wpamp\resource.h
+
+1790881251 source:d:\wpamp\www\wpamp\main.cpp
+	<fstream>
+	<sstream>
+	<map>
+	<vector>
+	<dirent.h>
+	<thread>
+	<atomic>
+	<winsock2.h>
+	<windows.h>
+	<iphlpapi.h>
+	<richedit.h>
+	<tlhelp32.h>
+	<ctime>
+	"resource.h"
+

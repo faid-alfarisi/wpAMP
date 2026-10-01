@@ -1,11 +1,16 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <vector>
 #include <dirent.h>
 #include <thread>
+#include <atomic>
 #include <winsock2.h>
 #include <windows.h>
+#include <iphlpapi.h>
+#include <richedit.h>
 #include <tlhelp32.h>
+#include <ctime>
 #include "resource.h"
 
 #define APPWM_ICONNOTIFY (WM_APP + 1)
@@ -18,18 +23,34 @@ HANDLE hMutexHandle;
 PROCESS_INFORMATION execApache = {};
 PROCESS_INFORMATION execMySQL = {};
 
-std::ifstream fi;
-std::ofstream fo;
+const COLORREF COLOR_INFO  = RGB(0, 0, 0);     // Black
+const COLORREF COLOR_OK    = RGB(0, 140, 0);   // Green
+const COLORREF COLOR_ERROR = RGB(200, 0, 0);   // Red
+
+// Control ID Constants
+const int START_ALL_BTN     = ID_START_ALL_BTN;      // 0
+const int START_SERVER_BTN  = ID_START_SERVER_BTN;   // 1
+const int START_MYSQL_BTN   = ID_START_MYSQL_BTN;    // 2
+const int CLEAR_LOG_BTN     = ID_CLEAR_LOG_BTN;      // 3
+const int BROWSE_WWW_BTN    = ID_BROWSE_WWW_BTN;     // 4
+const int TERMINAL_BTN      = ID_TERMINAL_BTN;       // 5
+const int PHP_DROPDOWN      = ID_PHP_DROPDOWN;       // 6
+const int PHP_CONF_BTN      = ID_PHP_CONF_BTN;       // 7
+const int APACHE_PORT_BTN   = ID_APACHE_PORT_BTN;    // 8
+const int APACHE_CONF_BTN   = ID_APACHE_CONF_BTN;    // 9
+const int MYSQL_DROPDOWN    = ID_MYSQL_DROPDOWN;     // 10
+const int MYSQL_PORT_BTN    = ID_MYSQL_PORT_BTN;     // 11
+const int MYSQL_CONF_BTN    = ID_MYSQL_CONF_BTN;     // 12
+const int LOG_BOX           = ID_LOG_BOX;            // 13
+
 std::map<int, std::string> binPath = {
-    {3, "php"},
-    {7, "mysql"}
+    {PHP_DROPDOWN, "php"},
+    {MYSQL_DROPDOWN, "mysql"}
 };
 std::map<std::string, std::string> config = {
     {"php", ""},
-    {"apache_host", "127.0.0.1"},
     {"apache_port", "80"},
     {"mysql", ""},
-    {"mysql_host", "127.0.0.1"},
     {"mysql_port", "3306"}
 };
 std::string appPath = "";
@@ -37,6 +58,53 @@ int configType = 0;
 char buffer[MAX_PATH];
 bool isServerRun = false;
 bool isDatabaseRun = false;
+std::atomic<bool> isBusy(false);
+std::atomic<bool> isStoppingServer(false);
+std::atomic<bool> isStoppingDatabase(false);
+
+bool FileExists(const std::string& path)
+{
+    DWORD attr = GetFileAttributesA(path.c_str());
+    return (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+bool DirectoryExists(const std::string& path)
+{
+    DWORD attr = GetFileAttributesA(path.c_str());
+    return (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+std::string GetTimeNow()
+{
+    time_t now = time(nullptr);
+    char buf[32];
+    strftime(buf, sizeof(buf), "%H:%M:%S", localtime(&now));
+    return buf;
+}
+
+void AppendLog(const std::string& line, COLORREF color = COLOR_INFO, bool withTimestamp = true)
+{
+    HWND hLog = GetDlgItem(mainDlg, LOG_BOX);
+    if (!hLog) return;
+
+    int len = GetWindowTextLengthA(hLog);
+    SendMessageA(hLog, EM_SETSEL, len, len);
+
+    CHARFORMAT2A cf = {};
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_COLOR;
+    cf.crTextColor = color;
+    cf.dwEffects = 0;
+    SendMessageA(hLog, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+
+    std::string formatted = (withTimestamp ? ("[" + GetTimeNow() + "] ") : "") + line + "\r\n";
+    SendMessageA(hLog, EM_REPLACESEL, FALSE, (LPARAM)formatted.c_str());
+
+    int newLen = GetWindowTextLengthA(hLog);
+    SendMessageA(hLog, EM_SETSEL, newLen, newLen);
+    SendMessageA(hLog, EM_SCROLLCARET, 0, 0);
+    SendMessageA(hLog, WM_VSCROLL, SB_BOTTOM, 0);
+}
 
 std::map<std::string, std::string> GetApachePhpModule()
 {
@@ -48,17 +116,18 @@ std::map<std::string, std::string> GetApachePhpModule()
         {"file", ""}
     };
 
+    if (config["php"].empty()) return ret;
+
     if ((dir = opendir(phpPath.c_str())) != NULL)
     {
-        // print all the directories within directory
         while ((ent = readdir(dir)) != NULL)
         {
             std::string fileName = std::string(ent->d_name);
             std::string lowerFileName = fileName;
 
-            for(auto &c : lowerFileName)
+            for (auto &c : lowerFileName)
             {
-               c = std::tolower(c);
+                c = std::tolower(static_cast<unsigned char>(c));
             }
 
             if (
@@ -67,22 +136,32 @@ std::map<std::string, std::string> GetApachePhpModule()
                 lowerFileName.find(".dll") != std::string::npos
             )
             {
-                fi.open(std::string(phpPath + "\\" + fileName).c_str());
-                if (fi.is_open())
+                std::string fullModulePath = phpPath + "\\" + fileName;
+                if (FileExists(fullModulePath))
                 {
                     ret["file"] = fileName;
 
-                    int firstPos = lowerFileName.find("php") + 3; // +3 from std::string("php").length()
-                    int lastPos = lowerFileName.find("apache");
+                    size_t firstPos = lowerFileName.find("php") + 3;
+                    size_t lastPos = lowerFileName.find("apache");
                     bool isNumber = true;
-                    std::string phpVer = lowerFileName.substr(firstPos, lastPos - firstPos);
+                    std::string phpVer = "";
 
-                    for (char const &ch : phpVer)
+                    if (lastPos != std::string::npos && lastPos >= firstPos)
                     {
-                        if (std::isdigit(ch) == 0)
+                        phpVer = lowerFileName.substr(firstPos, lastPos - firstPos);
+                        if (phpVer.empty()) isNumber = false;
+                        for (char const &ch : phpVer)
                         {
-                            isNumber = false;
+                            if (!std::isdigit(static_cast<unsigned char>(ch)))
+                            {
+                                isNumber = false;
+                                break;
+                            }
                         }
+                    }
+                    else
+                    {
+                        isNumber = false;
                     }
 
                     ret["name"] = "php" + phpVer + "_module";
@@ -90,8 +169,8 @@ std::map<std::string, std::string> GetApachePhpModule()
                     {
                         ret["name"] = "php_module";
                     }
+                    break;
                 }
-                fi.close();
             }
         }
         closedir(dir);
@@ -113,13 +192,11 @@ std::map<std::string, std::string> GetReplaceText()
 
     return {
         {"{APACHE_PATH}", slashPath + "/bin/apache"},
-        {"{APACHE_HOST}", config["apache_host"]},
         {"{APACHE_PORT}", config["apache_port"]},
         {"{PHP_PATH}", slashPath + "/bin/php/" + config["php"]},
         {"{PHP_MODULE_NAME}", phpModule["name"]},
         {"{PHP_MODULE_FILE}", phpModule["file"]},
         {"{MYSQL_PATH}", slashPath + "/bin/mysql/" + config["mysql"]},
-        {"{MYSQL_HOST}", config["mysql_host"]},
         {"{MYSQL_PORT}", config["mysql_port"]},
         {"{TMP_PATH}", slashPath + "/tmp"},
         {"{WWW_PATH}", slashPath + "/www"}
@@ -130,115 +207,101 @@ void ReadWriteSettings(bool rewrite = false)
 {
     std::string configFile = appPath + "\\wpAMP.ini";
 
-    std::ifstream fi(configFile);
-
-    if (!fi.is_open() || rewrite)
+    if (rewrite || !FileExists(configFile))
     {
-        fi.close();
-        fo.open(configFile, std::ios::out | std::ios::trunc);
-        fo << "php=" << config["php"].c_str() << "\n";
-        fo << "apache_host=" << config["apache_host"].c_str() << "\n";
-        fo << "apache_port=" << config["apache_port"].c_str() << "\n";
-        fo << "mysql=" << config["mysql"].c_str() << "\n";
-        fo << "mysql_host=" << config["mysql_host"].c_str() << "\n";
-        fo << "mysql_port=" << config["mysql_port"].c_str();
-        fo.close();
-        std::ifstream fi(configFile);
-    }
-
-    std::string line;
-    while (std::getline(fi, line))
-    {
-        std::istringstream is_line(line);
-        std::string key;
-        if (std::getline(is_line, key, '='))
+        std::ofstream fo(configFile, std::ios::out | std::ios::trunc);
+        if (fo.is_open())
         {
-            std::string value;
-            if (std::getline(is_line, value))
-            {
-                if (config.find(key) != config.end() && value.length() > 0)
-                {
-                    config[key] = value;
-                }
-            }
+            fo << "php=" << config["php"] << "\n";
+            fo << "apache_port=" << config["apache_port"] << "\n";
+            fo << "mysql=" << config["mysql"] << "\n";
+            fo << "mysql_port=" << config["mysql_port"];
+            fo.close();
         }
     }
 
-    fi.close();
-}
-
-void AppendLog(const std::string& line)
-{
-    HWND hLog = GetDlgItem(mainDlg, 10);
-    int len = GetWindowTextLengthA(hLog);
-    SendMessageA(hLog, EM_SETSEL, len, len);
-    SendMessageA(hLog, EM_REPLACESEL, 0, (LPARAM)(line + "\r\n").c_str());
-    SendMessageA(hLog, EM_SCROLLCARET, 0, 0);
-    SendMessageA(hLog, EM_SETSEL, -1, -1);
+    std::ifstream fi(configFile);
+    if (fi.is_open())
+    {
+        std::string line;
+        while (std::getline(fi, line))
+        {
+            std::istringstream is_line(line);
+            std::string key;
+            if (std::getline(is_line, key, '='))
+            {
+                std::string value;
+                if (std::getline(is_line, value))
+                {
+                    if (config.find(key) != config.end() && value.length() > 0)
+                    {
+                        config[key] = value;
+                    }
+                }
+            }
+        }
+        fi.close();
+    }
 }
 
 void OpenConfigFile(std::string filePath)
 {
-    fi.open(filePath);
-    if (!fi.is_open())
+    if (!FileExists(filePath))
     {
         MessageBoxA(mainDlg, std::string("Can't find \"" + filePath + "\".").c_str(), "Error", MB_OK | MB_ICONERROR);
-        fi.close();
         return;
     }
-    fi.close();
     ShellExecuteA(NULL, "open", "notepad.exe", filePath.c_str(), NULL, SW_NORMAL);
-    ExitThread(0);
-}
-
-void EnableDisableItem(bool enabled, const char *label = "", int item = 0)
-{
-    for (int i = 0; i < 10; i++)
-    {
-        EnableWindow(GetDlgItem(mainDlg, i), enabled);
-    }
-
-    if (enabled) SendDlgItemMessageA(mainDlg, 0, WM_SETTEXT, 0, (LPARAM)(isServerRun || isDatabaseRun ? "Stop All" : "Start All"));
-    SendDlgItemMessageA(mainDlg, 1, WM_SETTEXT, 0, (LPARAM)(isServerRun ? "Stop Server" : "Start Server"));
-    SendDlgItemMessageA(mainDlg, 2, WM_SETTEXT, 0, (LPARAM)(isDatabaseRun ? "Stop MySQL" : "Start MySQL"));
-
-    if (!enabled)
-    {
-        SendDlgItemMessageA(mainDlg, 0, WM_SETTEXT, 0, (LPARAM)label);
-        SendDlgItemMessageA(mainDlg, item, WM_SETTEXT, 0, (LPARAM)label);
-    }
 }
 
 bool RewriteAppConfig(std::string fromFile, std::string toFile)
 {
-    std::string strTemp;
-    std::map<std::string, std::string> replaceText = GetReplaceText();
-
-    fi.open(fromFile);
-    if (!fi.is_open())
+    if (!FileExists(fromFile))
     {
         MessageBoxA(mainDlg, std::string("Can't find \"" + fromFile + "\".").c_str(), "Error", MB_OK | MB_ICONERROR);
-        fi.close();
         return false;
     }
 
-    fo.open(toFile, std::ios::out | std::ios::trunc);
-    if (!fo.is_open())
+    std::ifstream fi(fromFile);
+    if (!fi.is_open())
     {
-        MessageBoxA(mainDlg, std::string("Error writing to \"" + toFile + "\".").c_str(), "Error", MB_OK | MB_ICONERROR);
-        fi.close();
+        MessageBoxA(mainDlg, std::string("Can't open \"" + fromFile + "\".").c_str(), "Error", MB_OK | MB_ICONERROR);
         return false;
     }
+
+    std::ofstream fo(toFile, std::ios::out | std::ios::trunc);
+    if (!fo.is_open())
+    {
+        fi.close();
+        MessageBoxA(mainDlg, std::string("Error writing to \"" + toFile + "\".").c_str(), "Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    std::map<std::string, std::string> replaceText = GetReplaceText();
+    std::string strTemp;
+    std::string phpLibpq = appPath + "\\bin\\php\\" + config["php"] + "\\libpq.dll";
+    bool libpqAvailable = FileExists(phpLibpq);
 
     while (getline(fi, strTemp))
     {
-        for (auto entry : replaceText)
+        // Safe check for libpq.dll directive in apache config
+        if (!libpqAvailable && strTemp.find("libpq.dll") != std::string::npos && strTemp.find("LoadFile") != std::string::npos)
         {
-            auto text_1 = entry.first;
-            auto text_2 = entry.second;
-            while (strTemp.find(text_1) != std::string::npos)
+            if (strTemp.empty() || strTemp[0] != '#')
             {
-                strTemp.replace(strTemp.find(text_1), text_1.length(), text_2);
+                strTemp = "#" + strTemp;
+            }
+        }
+
+        for (const auto &entry : replaceText)
+        {
+            const std::string &search = entry.first;
+            const std::string &replace = entry.second;
+            size_t pos = 0;
+            while ((pos = strTemp.find(search, pos)) != std::string::npos)
+            {
+                strTemp.replace(pos, search.length(), replace);
+                pos += replace.length();
             }
         }
         fo << strTemp << "\n";
@@ -248,137 +311,379 @@ bool RewriteAppConfig(std::string fromFile, std::string toFile)
     return true;
 }
 
-bool CheckIpAddress(std::string ipAddress)
+void EnableDisableItem(bool enabled, const char *label = "", int item = 0)
 {
-    return (int)inet_addr(ipAddress.c_str()) != (int)-1;
+    if (!enabled)
+    {
+        for (int i = 0; i <= MYSQL_CONF_BTN; i++)
+        {
+            EnableWindow(GetDlgItem(mainDlg, i), FALSE);
+        }
+        SendDlgItemMessageA(mainDlg, START_ALL_BTN, WM_SETTEXT, 0, (LPARAM)label);
+        SendDlgItemMessageA(mainDlg, item, WM_SETTEXT, 0, (LPARAM)label);
+    }
+    else
+    {
+        // Primary start/stop buttons
+        EnableWindow(GetDlgItem(mainDlg, START_ALL_BTN), TRUE);
+        EnableWindow(GetDlgItem(mainDlg, START_SERVER_BTN), TRUE);
+        EnableWindow(GetDlgItem(mainDlg, START_MYSQL_BTN), TRUE);
+
+        SendDlgItemMessageA(mainDlg, START_ALL_BTN, WM_SETTEXT, 0, (LPARAM)(isServerRun || isDatabaseRun ? "Stop All" : "Start All"));
+        SendDlgItemMessageA(mainDlg, START_SERVER_BTN, WM_SETTEXT, 0, (LPARAM)(isServerRun ? "Stop Server" : "Start Server"));
+        SendDlgItemMessageA(mainDlg, START_MYSQL_BTN, WM_SETTEXT, 0, (LPARAM)(isDatabaseRun ? "Stop MySQL" : "Start MySQL"));
+
+        // Utility buttons
+        EnableWindow(GetDlgItem(mainDlg, CLEAR_LOG_BTN), TRUE);
+        EnableWindow(GetDlgItem(mainDlg, BROWSE_WWW_BTN), TRUE);
+        EnableWindow(GetDlgItem(mainDlg, TERMINAL_BTN), TRUE);
+
+        // Server / PHP controls: locked if server is running
+        EnableWindow(GetDlgItem(mainDlg, PHP_DROPDOWN), !isServerRun);
+        EnableWindow(GetDlgItem(mainDlg, PHP_CONF_BTN), TRUE);
+        EnableWindow(GetDlgItem(mainDlg, APACHE_PORT_BTN), !isServerRun);
+        EnableWindow(GetDlgItem(mainDlg, APACHE_CONF_BTN), TRUE);
+
+        // MySQL controls: locked if MySQL is running
+        EnableWindow(GetDlgItem(mainDlg, MYSQL_DROPDOWN), !isDatabaseRun);
+        EnableWindow(GetDlgItem(mainDlg, MYSQL_PORT_BTN), !isDatabaseRun);
+        EnableWindow(GetDlgItem(mainDlg, MYSQL_CONF_BTN), TRUE);
+    }
 }
 
-bool CheckHostPort(std::string host, int port)
+void OpenTerminal()
 {
-    WSADATA wsaData;
-    int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-    if (iResult != NO_ERROR) {
-        MessageBoxA(mainDlg, "Checking port failed.", "Error", MB_OK | MB_ICONERROR);
-        return false;
+    if (config["php"].empty() && config["mysql"].empty())
+    {
+        MessageBoxA(mainDlg, "No PHP or MySQL selected.", "Warning", MB_OK | MB_ICONEXCLAMATION);
+        return;
     }
 
-    SOCKADDR_IN client;
-    SOCKET sock;
-
-    client.sin_family = AF_INET;
-    client.sin_addr.s_addr = inet_addr(host.c_str());
-    client.sin_port = htons(port);
-
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    if (bind(sock, (PSOCKADDR)&client, sizeof(SOCKADDR_IN)) == SOCKET_ERROR) {
-        MessageBoxA(mainDlg, std::string("Can't use host \"" + host + "\" port \"" + std::to_string(port) + "\"").c_str(), "Error", MB_OK | MB_ICONERROR);
-        WSACleanup();
-        return false;
+    std::string wwwPath = appPath + "\\www";
+    if (!DirectoryExists(wwwPath))
+    {
+        CreateDirectoryA(wwwPath.c_str(), NULL);
     }
 
-    WSACleanup();
-    closesocket(sock);
+    // Refresh php.ini from php_wpamp.ini so changes made via [...] take effect immediately in CLI
+    if (!config["php"].empty())
+    {
+        std::string phpPath = appPath + "\\bin\\php\\" + config["php"];
+        RewriteAppConfig(phpPath + "\\php_wpamp.ini", phpPath + "\\php.ini");
+    }
 
-    return true;
+    // Refresh my.ini from my_wpamp.ini if MySQL is not currently running
+    if (!config["mysql"].empty() && !isDatabaseRun)
+    {
+        std::string mysqlPath = appPath + "\\bin\\mysql\\" + config["mysql"];
+        RewriteAppConfig(mysqlPath + "\\my_wpamp.ini", mysqlPath + "\\my.ini");
+    }
+
+    std::string phpBin = "";
+    if (!config["php"].empty())
+    {
+        phpBin = appPath + "\\bin\\php\\" + config["php"] + ";";
+    }
+
+    std::string mysqlBin = "";
+    if (!config["mysql"].empty())
+    {
+        mysqlBin = appPath + "\\bin\\mysql\\" + config["mysql"] + "\\bin;";
+    }
+
+    std::string apacheBin = appPath + "\\bin\\apache\\bin;";
+
+    char envBuf[32767];
+    DWORD len = GetEnvironmentVariableA("PATH", envBuf, sizeof(envBuf));
+    std::string origPath = (len > 0) ? std::string(envBuf) : "";
+    std::string newPath = phpBin + mysqlBin + apacheBin + origPath;
+
+    SetEnvironmentVariableA("PATH", newPath.c_str());
+
+    char origMysqlTcpPort[32];
+    DWORD portLen = GetEnvironmentVariableA("MYSQL_TCP_PORT", origMysqlTcpPort, sizeof(origMysqlTcpPort));
+    bool hadMysqlTcpPort = (portLen > 0);
+
+    if (!config["mysql_port"].empty())
+    {
+        SetEnvironmentVariableA("MYSQL_TCP_PORT", config["mysql_port"].c_str());
+    }
+
+    std::string cmdTitle = "wpAMP CLI";
+    if (!config["php"].empty() && !config["mysql"].empty())
+    {
+        cmdTitle += " (PHP: " + config["php"] + ", MySQL: " + config["mysql"] + ")";
+    }
+    else if (!config["php"].empty())
+    {
+        cmdTitle += " (PHP: " + config["php"] + ")";
+    }
+    else if (!config["mysql"].empty())
+    {
+        cmdTitle += " (MySQL: " + config["mysql"] + ")";
+    }
+
+    std::string cmdArgs = "/k \"title " + cmdTitle;
+    cmdArgs += "&& echo [wpAMP] CLI Environment";
+    if (!config["php"].empty())
+    {
+        cmdArgs += "&& echo PHP       : " + config["php"];
+    }
+    if (!config["mysql"].empty())
+    {
+        std::string mysqlStatus = isDatabaseRun ? ("[RUNNING on port " + config["mysql_port"] + "]") : "[STOPPED - start MySQL in wpAMP to connect]";
+        cmdArgs += "&& echo MySQL     : " + config["mysql"] + " " + mysqlStatus;
+    }
+    cmdArgs += "&& echo Directory : " + wwwPath;
+
+    if (!config["php"].empty() && FileExists(appPath + "\\bin\\php\\" + config["php"] + "\\php.exe"))
+    {
+        cmdArgs += "&& echo.&& php -v";
+    }
+    if (!config["mysql"].empty() && FileExists(appPath + "\\bin\\mysql\\" + config["mysql"] + "\\bin\\mysql.exe"))
+    {
+        cmdArgs += "&& echo.&& mysql --version";
+    }
+    cmdArgs += "&& echo.\"";
+
+    ShellExecuteA(NULL, "open", "cmd.exe", cmdArgs.c_str(), wwwPath.c_str(), SW_NORMAL);
+
+    SetEnvironmentVariableA("PATH", origPath.c_str());
+    if (hadMysqlTcpPort)
+    {
+        SetEnvironmentVariableA("MYSQL_TCP_PORT", origMysqlTcpPort);
+    }
+    else
+    {
+        SetEnvironmentVariableA("MYSQL_TCP_PORT", NULL);
+    }
+}
+
+std::vector<DWORD> GetProcessTreePids(DWORD rootPid)
+{
+    std::vector<DWORD> pids = { rootPid };
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE)
+    {
+        PROCESSENTRY32 pe;
+        memset(&pe, 0, sizeof(pe));
+        pe.dwSize = sizeof(pe);
+        if (Process32First(hSnap, &pe))
+        {
+            do
+            {
+                for (size_t i = 0; i < pids.size(); i++)
+                {
+                    if (pe.th32ParentProcessID == pids[i] && pe.th32ProcessID != pids[i])
+                    {
+                        bool exists = false;
+                        for (DWORD existing : pids)
+                        {
+                            if (existing == pe.th32ProcessID) { exists = true; break; }
+                        }
+                        if (!exists) pids.push_back(pe.th32ProcessID);
+                    }
+                }
+            }
+            while (Process32Next(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+    }
+    return pids;
+}
+
+bool IsProcessTreeListeningOnPort(DWORD rootPid, int targetPort)
+{
+    std::vector<DWORD> pids = GetProcessTreePids(rootPid);
+
+    auto isOurPid = [&](DWORD pid) {
+        for (DWORD targetPid : pids) {
+            if (pid == targetPid) return true;
+        }
+        return false;
+    };
+
+    bool anyListening = false;
+
+    // 1. Check IPv4 TCP listeners
+    DWORD size = 0;
+    if (GetExtendedTcpTable(NULL, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) == ERROR_INSUFFICIENT_BUFFER)
+    {
+        std::vector<char> buffer(size);
+        if (GetExtendedTcpTable(buffer.data(), &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) == NO_ERROR)
+        {
+            PMIB_TCPTABLE_OWNER_PID pTable = (PMIB_TCPTABLE_OWNER_PID)buffer.data();
+            for (DWORD i = 0; i < pTable->dwNumEntries; i++)
+            {
+                if (isOurPid(pTable->table[i].dwOwningPid))
+                {
+                    int port = ntohs((u_short)pTable->table[i].dwLocalPort);
+                    if (targetPort <= 0 || port == targetPort) return true;
+                    anyListening = true;
+                }
+            }
+        }
+    }
+
+    // 2. Check IPv6 TCP listeners
+    size = 0;
+    if (GetExtendedTcpTable(NULL, &size, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_LISTENER, 0) == ERROR_INSUFFICIENT_BUFFER)
+    {
+        std::vector<char> buffer(size);
+        if (GetExtendedTcpTable(buffer.data(), &size, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_LISTENER, 0) == NO_ERROR)
+        {
+            PMIB_TCP6TABLE_OWNER_PID pTable = (PMIB_TCP6TABLE_OWNER_PID)buffer.data();
+            for (DWORD i = 0; i < pTable->dwNumEntries; i++)
+            {
+                if (isOurPid(pTable->table[i].dwOwningPid))
+                {
+                    int port = ntohs((u_short)pTable->table[i].dwLocalPort);
+                    if (targetPort <= 0 || port == targetPort) return true;
+                    anyListening = true;
+                }
+            }
+        }
+    }
+
+    return anyListening;
+}
+
+bool WaitForPortReady(HANDLE hProc, int port, int timeoutMs = 4000)
+{
+    DWORD procId = GetProcessId(hProc);
+    int elapsed = 0;
+    const int stepMs = 100;
+
+    while (elapsed < timeoutMs)
+    {
+        // If child process terminated or crashed, abort polling immediately!
+        if (WaitForSingleObject(hProc, 0) == WAIT_OBJECT_0)
+        {
+            break;
+        }
+
+        if (IsProcessTreeListeningOnPort(procId, port))
+        {
+            return true;
+        }
+
+        Sleep(stepMs);
+        elapsed += stepMs;
+    }
+
+    return false;
 }
 
 void KillProcessTree(DWORD procID)
 {
     PROCESSENTRY32 pe;
-
     memset(&pe, 0, sizeof(PROCESSENTRY32));
     pe.dwSize = sizeof(PROCESSENTRY32);
 
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-
-    if (Process32First(hSnap, &pe))
+    if (hSnap != INVALID_HANDLE_VALUE)
     {
-        do
+        if (Process32First(hSnap, &pe))
         {
-            if (pe.th32ParentProcessID == procID)
+            do
             {
-                KillProcessTree(pe.th32ProcessID);
+                if (pe.th32ParentProcessID == procID)
+                {
+                    KillProcessTree(pe.th32ProcessID);
+                }
             }
+            while (Process32Next(hSnap, &pe));
         }
-        while (Process32Next(hSnap, &pe));
+        CloseHandle(hSnap);
     }
 
-    // kill the main process
     HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, procID);
-
     if (hProc)
     {
         TerminateProcess(hProc, 0);
-        WaitForSingleObject(hProc, INFINITE);
+        WaitForSingleObject(hProc, 3000);
         CloseHandle(hProc);
     }
 }
 
-void HandleClosed(HANDLE &hProc, bool &isRun)
+void MonitorProcess(std::string serviceName, HANDLE hProc, HANDLE hRead, bool &isRunFlag, std::atomic<bool> &isStoppingFlag)
 {
+    std::string capturedOutput;
+    char buf[1024];
+    DWORD bytesRead;
+
+    while (ReadFile(hRead, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0)
+    {
+        buf[bytesRead] = '\0';
+        capturedOutput += buf;
+        if (capturedOutput.length() > 65536)
+        {
+            capturedOutput = capturedOutput.substr(capturedOutput.length() - 32768);
+        }
+    }
+    CloseHandle(hRead);
+
+    DWORD exitCode = 0;
     WaitForSingleObject(hProc, INFINITE);
-    isRun = false;
+    GetExitCodeProcess(hProc, &exitCode);
+    CloseHandle(hProc);
+
+    bool stoppedByUser = isStoppingFlag.exchange(false);
+    isRunFlag = false;
+    isBusy = false;
     EnableDisableItem(true);
-    ExitThread(0);
+
+    if (!stoppedByUser)
+    {
+        AppendLog("[ERROR] " + serviceName + " stopped unexpectedly (Exit code: " + std::to_string(exitCode) + ")", COLOR_ERROR);
+        if (!capturedOutput.empty())
+        {
+            AppendLog(capturedOutput, COLOR_ERROR, false);
+        }
+        MessageBoxA(mainDlg, (serviceName + " stopped unexpectedly (Exit code: " + std::to_string(exitCode) + ").").c_str(), "Error", MB_OK | MB_ICONERROR);
+    }
 }
 
 void StartServer()
 {
     if (isServerRun) return;
 
-    AppendLog("Starting Server ...");
-
-    bool nextStep = true;
-    std::string apachePath, apacheExe, phpPath, configFrom, configTo;
-
-    if (config["php"].length() == 0)
+    if (config["php"].empty())
     {
         MessageBoxA(mainDlg, "No PHP selected.", "Warning", MB_OK | MB_ICONEXCLAMATION);
-        nextStep = false;
+        return;
     }
 
-    if (!nextStep) return;
+    AppendLog("Starting Server (" + config["php"] + ")", COLOR_INFO);
 
-    apachePath = appPath + "\\bin\\apache";
-    apacheExe = apachePath + "\\bin\\httpd.exe";
-    configFrom = apachePath + "\\conf\\httpd_wpamp.conf";
-    configTo = apachePath + "\\conf\\httpd.conf";
+    std::string apachePath = appPath + "\\bin\\apache";
+    std::string apacheExe = apachePath + "\\bin\\httpd.exe";
+    std::string configFrom = apachePath + "\\conf\\httpd_wpamp.conf";
+    std::string configTo = apachePath + "\\conf\\httpd.conf";
 
-    nextStep = RewriteAppConfig(configFrom, configTo);
+    if (!RewriteAppConfig(configFrom, configTo)) return;
 
-    if (!nextStep) return;
-
-    fi.open(apacheExe);
-    if (!fi.is_open())
+    if (!FileExists(apacheExe))
     {
         MessageBoxA(mainDlg, std::string("Can't find \"" + apacheExe + "\".").c_str(), "Error", MB_OK | MB_ICONERROR);
-        nextStep = false;
+        return;
     }
-    fi.close();
 
-    if (!nextStep) return;
-
-    phpPath = appPath + "\\bin\\php\\" + config["php"];
+    std::string phpPath = appPath + "\\bin\\php\\" + config["php"];
     configFrom = phpPath + "\\php_wpamp.ini";
     configTo = phpPath + "\\php.ini";
 
-    nextStep = RewriteAppConfig(configFrom, configTo);
-
-    if (!nextStep) return;
+    if (!RewriteAppConfig(configFrom, configTo)) return;
 
     std::map<std::string, std::string> phpModule = GetApachePhpModule();
-    if (phpModule["file"] == std::string("") || phpModule["file"] == std::string(""))
+    if (phpModule["file"].empty() || phpModule["name"].empty())
     {
-        MessageBoxA(mainDlg, "Can't find PHP Apache module.", "Error", MB_OK | MB_ICONERROR);
-        nextStep = false;
+        MessageBoxA(mainDlg, "Can't find PHP Apache module in selected PHP folder.", "Error", MB_OK | MB_ICONERROR);
+        return;
     }
 
-    if (!nextStep) return;
-
-    nextStep = CheckHostPort(config["apache_host"], stoi(config["apache_port"]));
-
-    if (!nextStep) return;
+    int portNum = atoi(config["apache_port"].c_str());
+    if (portNum <= 0 || portNum > 65535) portNum = 80;
 
     SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
     HANDLE hRead = NULL, hWrite = NULL;
@@ -387,16 +692,23 @@ void StartServer()
         MessageBoxA(mainDlg, "Failed to create pipe.", "Error", MB_OK | MB_ICONERROR);
         return;
     }
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOA si = { 0 };
-
     si.cb = sizeof(si);
     si.dwFlags |= STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     si.wShowWindow = SW_HIDE;
     si.hStdOutput = hWrite;
     si.hStdError = hWrite;
 
-    std::string cmdLine = "\"" + apacheExe + "\"";
+    // Set PATH environment variable to include PHP directory so php8.dll / dependencies are found!
+    char envBuf[32767];
+    DWORD envLen = GetEnvironmentVariableA("PATH", envBuf, sizeof(envBuf));
+    std::string origPath = (envLen > 0) ? std::string(envBuf) : "";
+    std::string updatedPath = phpPath + ";" + apachePath + "\\bin;" + origPath;
+    SetEnvironmentVariableA("PATH", updatedPath.c_str());
+
+    std::string cmdLine = "\"" + apacheExe + "\" -d \"" + apachePath + "\"";
 
     BOOL success = CreateProcessA(
         NULL,
@@ -410,99 +722,112 @@ void StartServer()
         &execApache
     );
 
+    SetEnvironmentVariableA("PATH", origPath.c_str());
     CloseHandle(hWrite);
 
-    DWORD waitResult = WaitForSingleObject(execApache.hProcess, 1000);
-    DWORD exitCode = 0;
-    GetExitCodeProcess(execApache.hProcess, &exitCode);
-
-    if (waitResult == WAIT_OBJECT_0 && exitCode != 0) {
-        char buffer[512];
-        DWORD bytesRead;
-        std::string output;
-
-        while (ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-            buffer[bytesRead] = '\0';
-            output += buffer;
-        }
-
-        MessageBoxA(mainDlg, "Error starting Apache.", "Error", MB_OK | MB_ICONERROR);
-
-        if (!output.empty()) {
-            AppendLog(output);
-        }
-
+    if (!success) {
         CloseHandle(hRead);
-        if (execApache.hProcess) CloseHandle(execApache.hProcess);
-        if (execApache.hThread) CloseHandle(execApache.hThread);
-        execApache = {};
-    } else {
-        CloseHandle(hRead);
-        isServerRun = true;
-        std::thread(HandleClosed, std::ref(execApache.hProcess), std::ref(isServerRun)).detach();
-        AppendLog("Server started");
+        AppendLog("[ERROR] Failed to execute Apache (Error: " + std::to_string(GetLastError()) + ")", COLOR_ERROR);
+        MessageBoxA(mainDlg, "Failed to execute Apache.", "Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    isStoppingServer = false;
+    isServerRun = true;
+    HANDLE hProc = execApache.hProcess;
+    if (execApache.hThread) { CloseHandle(execApache.hThread); execApache.hThread = NULL; }
+
+    std::thread(MonitorProcess, "Apache", hProc, hRead, std::ref(isServerRun), std::ref(isStoppingServer)).detach();
+
+    if (WaitForPortReady(execApache.hProcess, portNum, 4000))
+    {
+        AppendLog("Server (" + config["php"] + ") started", COLOR_OK);
     }
 }
 
 void StopServer()
 {
     if (!isServerRun) return;
+    AppendLog("Stopping Server (" + config["php"] + ")", COLOR_INFO);
+    isStoppingServer = true;
 
-    AppendLog("Stopping Server ...");
-
-    if (WaitForSingleObject(execApache.hProcess, 0) == WAIT_TIMEOUT)
+    if (execApache.hProcess && WaitForSingleObject(execApache.hProcess, 0) == WAIT_TIMEOUT)
     {
-        DWORD pid = GetProcessId(execApache.hProcess);
-        KillProcessTree(pid);
-        if (execApache.hProcess) CloseHandle(execApache.hProcess);
-        if (execApache.hThread) CloseHandle(execApache.hThread);
-        execApache = {};
+        std::string apachePath = appPath + "\\bin\\apache";
+        std::string apacheExe = apachePath + "\\bin\\httpd.exe";
+
+        if (FileExists(apacheExe))
+        {
+            std::string stopCmd = "\"" + apacheExe + "\" -k stop -d \"" + apachePath + "\"";
+            STARTUPINFOA siStop = { sizeof(siStop) };
+            siStop.dwFlags = STARTF_USESHOWWINDOW;
+            siStop.wShowWindow = SW_HIDE;
+            PROCESS_INFORMATION piStop = {};
+
+            if (CreateProcessA(NULL, (LPSTR)stopCmd.c_str(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, apachePath.c_str(), &siStop, &piStop))
+            {
+                WaitForSingleObject(piStop.hProcess, 4000);
+                CloseHandle(piStop.hProcess);
+                CloseHandle(piStop.hThread);
+            }
+        }
+
+        if (WaitForSingleObject(execApache.hProcess, 3000) == WAIT_TIMEOUT)
+        {
+            DWORD pid = GetProcessId(execApache.hProcess);
+            KillProcessTree(pid);
+        }
     }
 
-    AppendLog("Server stopped");
-
     isServerRun = false;
+    execApache.hProcess = NULL;
+    AppendLog("Server (" + config["php"] + ") stopped", COLOR_INFO);
 }
 
 void StartDatabase()
 {
     if (isDatabaseRun) return;
 
-    AppendLog("Starting MySQL ...");
-
-    bool nextStep = true;
-    std::string mysqlPath, mysqlExe, configFrom, configTo;
-
-    if (config["mysql"].length() == 0)
+    if (config["mysql"].empty())
     {
         MessageBoxA(mainDlg, "No MySQL selected.", "Warning", MB_OK | MB_ICONEXCLAMATION);
-        nextStep = false;
+        return;
     }
 
-    if (!nextStep) return;
+    AppendLog("Starting MySQL (" + config["mysql"] + ")", COLOR_INFO);
 
-    mysqlPath = appPath + "\\bin\\mysql\\" + config["mysql"];
-    mysqlExe = mysqlPath + "\\bin\\mysqld.exe";
-    configFrom = mysqlPath + "\\my_wpamp.ini";
-    configTo = mysqlPath + "\\my.ini";
+    std::string mysqlPath = appPath + "\\bin\\mysql\\" + config["mysql"];
+    std::string mysqlExe = mysqlPath + "\\bin\\mysqld.exe";
+    std::string configFrom = mysqlPath + "\\my_wpamp.ini";
+    std::string configTo = mysqlPath + "\\my.ini";
 
-    nextStep = RewriteAppConfig(configFrom, configTo);
+    if (!RewriteAppConfig(configFrom, configTo)) return;
 
-    if (!nextStep) return;
-
-    fi.open(mysqlExe);
-    if (!fi.is_open())
+    if (!FileExists(mysqlExe))
     {
         MessageBoxA(mainDlg, std::string("Can't find \"" + mysqlExe + "\".").c_str(), "Error", MB_OK | MB_ICONERROR);
-        nextStep = false;
+        return;
     }
-    fi.close();
 
-    if (!nextStep) return;
+    int portNum = atoi(config["mysql_port"].c_str());
+    if (portNum <= 0 || portNum > 65535) portNum = 3306;
 
-    nextStep = CheckHostPort(config["mysql_host"], stoi(config["mysql_port"]));
-
-    if (!nextStep) return;
+    // Check if data directory exists; if not, attempt auto-initialization for MySQL 5.7+
+    std::string dataDir = mysqlPath + "\\data";
+    if (!DirectoryExists(dataDir))
+    {
+        std::string initCmd = "\"" + mysqlExe + "\" \"--defaults-file=" + configTo + "\" --initialize-insecure --console";
+        STARTUPINFOA siInit = { sizeof(siInit) };
+        siInit.dwFlags = STARTF_USESHOWWINDOW;
+        siInit.wShowWindow = SW_HIDE;
+        PROCESS_INFORMATION piInit = {};
+        if (CreateProcessA(NULL, (LPSTR)initCmd.c_str(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, mysqlPath.c_str(), &siInit, &piInit))
+        {
+            WaitForSingleObject(piInit.hProcess, 30000);
+            CloseHandle(piInit.hProcess);
+            CloseHandle(piInit.hThread);
+        }
+    }
 
     SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
     HANDLE hRead = NULL, hWrite = NULL;
@@ -511,16 +836,16 @@ void StartDatabase()
         MessageBoxA(mainDlg, "Failed to create pipe.", "Error", MB_OK | MB_ICONERROR);
         return;
     }
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOA si = { 0 };
-
     si.cb = sizeof(si);
     si.dwFlags |= STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     si.wShowWindow = SW_HIDE;
     si.hStdOutput = hWrite;
     si.hStdError = hWrite;
 
-    std::string cmdLine = "\"" + mysqlExe + "\" --console";
+    std::string cmdLine = "\"" + mysqlExe + "\" \"--defaults-file=" + configTo + "\" --console";
 
     BOOL success = CreateProcessA(
         NULL,
@@ -536,56 +861,62 @@ void StartDatabase()
 
     CloseHandle(hWrite);
 
-    DWORD waitResult = WaitForSingleObject(execMySQL.hProcess, 1000);
-    DWORD exitCode = 0;
-    GetExitCodeProcess(execMySQL.hProcess, &exitCode);
-
-    if (waitResult == WAIT_OBJECT_0 && exitCode != 0) {
-        char buffer[512];
-        DWORD bytesRead;
-        std::string output;
-
-        while (ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-            buffer[bytesRead] = '\0';
-            output += buffer;
-        }
-
-        MessageBoxA(mainDlg, "Error starting MySQL.", "Error", MB_OK | MB_ICONERROR);
-
-        if (!output.empty()) {
-            AppendLog(output);
-        }
-
+    if (!success) {
         CloseHandle(hRead);
-        if (execMySQL.hProcess) CloseHandle(execMySQL.hProcess);
-        if (execMySQL.hThread) CloseHandle(execMySQL.hThread);
-        execMySQL = {};
-    } else {
-        CloseHandle(hRead);
-        isDatabaseRun = true;
-        std::thread(HandleClosed, std::ref(execMySQL.hProcess), std::ref(isDatabaseRun)).detach();
-        AppendLog("MySQL started");
+        AppendLog("[ERROR] Failed to execute MySQL (Error: " + std::to_string(GetLastError()) + ")", COLOR_ERROR);
+        MessageBoxA(mainDlg, "Failed to execute MySQL.", "Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    isStoppingDatabase = false;
+    isDatabaseRun = true;
+    HANDLE hProc = execMySQL.hProcess;
+    if (execMySQL.hThread) { CloseHandle(execMySQL.hThread); execMySQL.hThread = NULL; }
+
+    std::thread(MonitorProcess, "MySQL", hProc, hRead, std::ref(isDatabaseRun), std::ref(isStoppingDatabase)).detach();
+
+    if (WaitForPortReady(execMySQL.hProcess, portNum, 5000))
+    {
+        AppendLog("MySQL (" + config["mysql"] + ") started", COLOR_OK);
     }
 }
 
 void StopDatabase()
 {
     if (!isDatabaseRun) return;
+    AppendLog("Stopping MySQL (" + config["mysql"] + ")", COLOR_INFO);
+    isStoppingDatabase = true;
 
-    AppendLog("Stopping MySQL ...");
-
-    if (WaitForSingleObject(execMySQL.hProcess, 0) == WAIT_TIMEOUT)
+    if (execMySQL.hProcess && WaitForSingleObject(execMySQL.hProcess, 0) == WAIT_TIMEOUT)
     {
-        DWORD pid = GetProcessId(execMySQL.hProcess);
-        KillProcessTree(pid);
-        if (execMySQL.hProcess) CloseHandle(execMySQL.hProcess);
-        if (execMySQL.hThread) CloseHandle(execMySQL.hThread);
-        execMySQL = {};
+        std::string mysqlAdminExe = appPath + "\\bin\\mysql\\" + config["mysql"] + "\\bin\\mysqladmin.exe";
+
+        if (FileExists(mysqlAdminExe))
+        {
+            std::string adminCmd = "\"" + mysqlAdminExe + "\" -u root -h 127.0.0.1 -P " + config["mysql_port"] + " shutdown";
+            STARTUPINFOA siAdmin = { sizeof(siAdmin) };
+            siAdmin.dwFlags = STARTF_USESHOWWINDOW;
+            siAdmin.wShowWindow = SW_HIDE;
+            PROCESS_INFORMATION piAdmin = {};
+
+            if (CreateProcessA(NULL, (LPSTR)adminCmd.c_str(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &siAdmin, &piAdmin))
+            {
+                WaitForSingleObject(piAdmin.hProcess, 5000);
+                CloseHandle(piAdmin.hProcess);
+                CloseHandle(piAdmin.hThread);
+            }
+        }
+
+        if (WaitForSingleObject(execMySQL.hProcess, 4000) == WAIT_TIMEOUT)
+        {
+            DWORD pid = GetProcessId(execMySQL.hProcess);
+            KillProcessTree(pid);
+        }
     }
 
-    AppendLog("MySQL stopped");
-
     isDatabaseRun = false;
+    execMySQL.hProcess = NULL;
+    AppendLog("MySQL (" + config["mysql"] + ") stopped", COLOR_INFO);
 }
 
 void StartAll(bool server, bool database)
@@ -593,35 +924,35 @@ void StartAll(bool server, bool database)
     ReadWriteSettings(true);
     if (server)
     {
-        EnableDisableItem(false, "Starting...", 1);
+        EnableDisableItem(false, "Starting...", START_SERVER_BTN);
         StartServer();
     }
     if (database)
     {
-        EnableDisableItem(false, "Starting...", 2);
+        EnableDisableItem(false, "Starting...", START_MYSQL_BTN);
         StartDatabase();
     }
     EnableDisableItem(true);
-    ExitThread(0);
+    isBusy = false;
 }
 
 void StopAll(bool server, bool database)
 {
     if (server)
     {
-        EnableDisableItem(false, "Stopping...", 1);
+        EnableDisableItem(false, "Stopping...", START_SERVER_BTN);
         StopServer();
     }
     if (database)
     {
-        EnableDisableItem(false, "Stopping...", 2);
+        EnableDisableItem(false, "Stopping...", START_MYSQL_BTN);
         StopDatabase();
     }
     EnableDisableItem(true);
-    ExitThread(0);
+    isBusy = false;
 }
 
-bool CALLBACK DlgConf(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK DlgConf(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg)
     {
@@ -641,19 +972,18 @@ bool CALLBACK DlgConf(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             MoveWindow(hwndDlg, posLeft, posTop, childWidth, childHeight, FALSE);
 
+            // Limit port text to max 5 digits (ports are 1..65535)
+            SendMessageA(GetDlgItem(hwndDlg, 2), EM_LIMITTEXT, 5, 0);
+
             switch (configType)
             {
                 case 1:
-                    SendMessageA(hwndDlg, WM_SETTEXT, 0, (LPARAM)"Apache Config");
-                    // host port
-                    SetDlgItemText(hwndDlg, 2, config["apache_host"].c_str());
-                    SetDlgItemText(hwndDlg, 3, config["apache_port"].c_str());
+                    SendMessageA(hwndDlg, WM_SETTEXT, 0, (LPARAM)"Apache Port");
+                    SetDlgItemText(hwndDlg, 2, config["apache_port"].c_str());
                     break;
                 case 2:
-                    SendMessageA(hwndDlg, WM_SETTEXT, 0, (LPARAM)"MySQL Config");
-                    // host port
-                    SetDlgItemText(hwndDlg, 2, config["mysql_host"].c_str());
-                    SetDlgItemText(hwndDlg, 3, config["mysql_port"].c_str());
+                    SendMessageA(hwndDlg, WM_SETTEXT, 0, (LPARAM)"MySQL Port");
+                    SetDlgItemText(hwndDlg, 2, config["mysql_port"].c_str());
                     break;
             }
         }
@@ -673,46 +1003,38 @@ bool CALLBACK DlgConf(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 case 0:
                 {
                     GetDlgItemText(hwndDlg, 2, buffer, MAX_PATH);
-                    std::string hostConfig = std::string(buffer);
-                    if (hostConfig.length() == 0)
-                    {
-                        MessageBoxA(hwndDlg, "Host can't be empty!", "Warning", MB_OK | MB_ICONEXCLAMATION);
-                        return false;
-                    }
-                    if (!CheckIpAddress(hostConfig))
-                    {
-                        MessageBoxA(hwndDlg, "Invalid Host IP address!", "Warning", MB_OK | MB_ICONEXCLAMATION);
-                        return false;
-                    }
-                    GetDlgItemText(hwndDlg, 3, buffer, MAX_PATH);
                     std::string portConfig = std::string(buffer);
                     if (portConfig.length() == 0)
                     {
                         MessageBoxA(hwndDlg, "Port can't be empty!", "Warning", MB_OK | MB_ICONEXCLAMATION);
                         return false;
                     }
+                    int p = atoi(portConfig.c_str());
+                    if (p <= 0 || p > 65535)
+                    {
+                        MessageBoxA(hwndDlg, "Port must be between 1 and 65535!", "Warning", MB_OK | MB_ICONEXCLAMATION);
+                        return false;
+                    }
                     switch (configType)
                     {
                         case 1:
                         {
-                            if (hostConfig == config["mysql_host"] && portConfig == config["mysql_port"])
+                            if (portConfig == config["mysql_port"])
                             {
-                                MessageBoxA(hwndDlg, "Host and Port can't be the same as MySQL config.", "Warning", MB_OK | MB_ICONEXCLAMATION);
+                                MessageBoxA(hwndDlg, "Apache and MySQL cannot use the same port.", "Warning", MB_OK | MB_ICONEXCLAMATION);
                                 return false;
                             }
-                            config["apache_host"] = hostConfig;
                             config["apache_port"] = portConfig;
                         }
                         break;
 
                         case 2:
                         {
-                            if (hostConfig == config["apache_host"] && portConfig == config["apache_port"])
+                            if (portConfig == config["apache_port"])
                             {
-                                MessageBoxA(hwndDlg, "Host and Port can't be the same as Apache config.", "Warning", MB_OK | MB_ICONEXCLAMATION);
+                                MessageBoxA(hwndDlg, "Apache and MySQL cannot use the same port.", "Warning", MB_OK | MB_ICONEXCLAMATION);
                                 return false;
                             }
-                            config["mysql_host"] = hostConfig;
                             config["mysql_port"] = portConfig;
                         }
                         break;
@@ -734,19 +1056,33 @@ bool CALLBACK DlgConf(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
     return false;
 }
 
-bool CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg)
     {
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLOREDIT:
+        {
+            if (GetDlgCtrlID((HWND)lParam) == LOG_BOX)
+            {
+                HDC hdc = (HDC)wParam;
+                SetTextColor(hdc, RGB(0, 0, 0));
+                SetBkColor(hdc, RGB(255, 255, 255));
+                return (INT_PTR)GetStockObject(WHITE_BRUSH);
+            }
+        }
+        break;
+
         case WM_INITDIALOG:
         {
-            // initialize dialog window
             mainDlg = hwndDlg;
             HICON hIcon = LoadIcon(hInst, MAKEINTRESOURCE(MAINICON));
             SendMessageA(hwndDlg, WM_SETICON, 0, (LPARAM)hIcon);
             SetFocus(hwndDlg);
 
-            // initialize notify icon
+            // Set white background for the log control
+            SendMessageA(GetDlgItem(hwndDlg, LOG_BOX), EM_SETBKGNDCOLOR, 0, (LPARAM)RGB(255, 255, 255));
+
             nid.cbSize = sizeof(NOTIFYICONDATA);
             nid.hWnd = hwndDlg;
             nid.uID = 1;
@@ -756,12 +1092,10 @@ bool CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
             nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
             nid.uCallbackMessage = APPWM_ICONNOTIFY;
 
-            // create directory
             CreateDirectoryA(std::string(appPath + "\\bin").c_str(), NULL);
             CreateDirectoryA(std::string(appPath + "\\tmp").c_str(), NULL);
             CreateDirectoryA(std::string(appPath + "\\www").c_str(), NULL);
 
-            // find app path
             DIR *dir;
             struct dirent *ent;
             std::string currdir;
@@ -772,39 +1106,41 @@ bool CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 currdir = appPath + "\\bin\\" + value + "\\";
                 if ((dir = opendir(currdir.c_str())) != NULL)
                 {
-                    // print all the directories within directory
                     while ((ent = readdir(dir)) != NULL)
                     {
-                        fi.open(std::string(currdir + std::string(ent->d_name)).c_str());
-                        if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0 && !fi.is_open())
+                        std::string fullItemPath = currdir + ent->d_name;
+                        if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0 && DirectoryExists(fullItemPath))
                         {
                             SendDlgItemMessageA(hwndDlg, key, CB_ADDSTRING, 0, (LPARAM)ent->d_name);
                         }
-                        fi.close();
                     }
                     closedir(dir);
 
                     if (config[value].length() == 0)
                     {
                         SendDlgItemMessageA(hwndDlg, key, CB_SETCURSEL, 0, 0);
-                        SendDlgItemMessageA(hwndDlg, key, CB_GETLBTEXT, 0, (LPARAM)(LPCTSTR)buffer);
-                        config[value] = std::string(buffer);
+                        if (SendDlgItemMessageA(hwndDlg, key, CB_GETLBTEXT, 0, (LPARAM)(LPCTSTR)buffer) != CB_ERR)
+                        {
+                            config[value] = std::string(buffer);
+                        }
                     }
                     else
                     {
-                        SendDlgItemMessageA(hwndDlg, key, CB_SELECTSTRING, 0, (LPARAM)config[value].c_str());
+                        SendDlgItemMessageA(hwndDlg, key, CB_SELECTSTRING, (WPARAM)-1, (LPARAM)config[value].c_str());
                         if (SendDlgItemMessageA(hwndDlg, key, CB_GETCURSEL, 0, 0) == CB_ERR)
                         {
                             SendDlgItemMessageA(hwndDlg, key, CB_SETCURSEL, 0, 0);
-                            SendDlgItemMessageA(hwndDlg, key, CB_GETLBTEXT, 0, (LPARAM)(LPCTSTR)buffer);
-                            config[value] = std::string(buffer);
+                            if (SendDlgItemMessageA(hwndDlg, key, CB_GETLBTEXT, 0, (LPARAM)(LPCTSTR)buffer) != CB_ERR)
+                            {
+                                config[value] = std::string(buffer);
+                            }
                         }
                     }
                 }
             }
 
-            // write settings
             ReadWriteSettings(true);
+            EnableDisableItem(true);
         }
         return true;
 
@@ -816,9 +1152,9 @@ bool CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 EndDialog(hwndDlg, 0);
             } else {
                 if (MessageBoxA(hwndDlg, "Are you sure want to exit?\nThis will stop all server and database.", "Confirm", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-                    EnableDisableItem(false, "Stopping...", 1);
+                    EnableDisableItem(false, "Stopping...", START_SERVER_BTN);
                     StopServer();
-                    EnableDisableItem(false, "Stopping...", 2);
+                    EnableDisableItem(false, "Stopping...", START_MYSQL_BTN);
                     StopDatabase();
                     EnableDisableItem(true);
                     ReleaseMutex(hMutexHandle);
@@ -833,48 +1169,74 @@ bool CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             switch (LOWORD(wParam))
             {
-                case 0:
+                case START_ALL_BTN:
                 {
-                    if (!isServerRun && !isDatabaseRun) // start
+                    if (isBusy.exchange(true)) break;
+                    if (!isServerRun && !isDatabaseRun)
                     {
                         std::thread(StartAll, true, true).detach();
                     }
-                    else // stop
+                    else
                     {
                         std::thread(StopAll, true, true).detach();
                     }
                 }
                 break;
 
-                case 1:
+                case START_SERVER_BTN:
                 {
-                    if (!isServerRun) // start
+                    if (isBusy.exchange(true)) break;
+                    if (!isServerRun)
                     {
                         std::thread(StartAll, true, false).detach();
                     }
-                    else // stop
+                    else
                     {
                         std::thread(StopAll, true, false).detach();
                     }
                 }
                 break;
 
-                case 2:
+                case START_MYSQL_BTN:
                 {
-                    if (!isDatabaseRun) // start
+                    if (isBusy.exchange(true)) break;
+                    if (!isDatabaseRun)
                     {
                         std::thread(StartAll, false, true).detach();
                     }
-                    else // stop
+                    else
                     {
                         std::thread(StopAll, false, true).detach();
                     }
                 }
                 break;
 
-                case 3:
+                case CLEAR_LOG_BTN:
                 {
-                    GetDlgItemText(hwndDlg, 3, buffer, MAX_PATH);
+                    SetWindowTextA(GetDlgItem(hwndDlg, LOG_BOX), "");
+                }
+                break;
+
+                case BROWSE_WWW_BTN:
+                {
+                    std::string wwwPath = appPath + "\\www";
+                    if (!DirectoryExists(wwwPath))
+                    {
+                        CreateDirectoryA(wwwPath.c_str(), NULL);
+                    }
+                    ShellExecuteA(NULL, "open", "explorer.exe", wwwPath.c_str(), NULL, SW_NORMAL);
+                }
+                break;
+
+                case TERMINAL_BTN:
+                {
+                    OpenTerminal();
+                }
+                break;
+
+                case PHP_DROPDOWN:
+                {
+                    GetDlgItemText(hwndDlg, PHP_DROPDOWN, buffer, MAX_PATH);
                     if (config["php"] != std::string(buffer))
                     {
                         config["php"] = std::string(buffer);
@@ -882,28 +1244,28 @@ bool CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 }
                 break;
 
-                case 4:
+                case PHP_CONF_BTN:
                 {
                     std::thread(OpenConfigFile, appPath + "\\bin\\php\\" + config["php"] + "\\php_wpamp.ini").detach();
                 }
                 break;
 
-                case 5:
+                case APACHE_PORT_BTN:
                 {
                     configType = 1;
                     DialogBox(hInst, MAKEINTRESOURCE(DLG_CONF), hwndDlg, (DLGPROC)DlgConf);
                 }
                 break;
 
-                case 6:
+                case APACHE_CONF_BTN:
                 {
                     std::thread(OpenConfigFile, appPath + "\\bin\\apache\\conf\\httpd_wpamp.conf").detach();
                 }
                 break;
 
-                case 7:
+                case MYSQL_DROPDOWN:
                 {
-                    GetDlgItemText(hwndDlg, 7, buffer, MAX_PATH);
+                    GetDlgItemText(hwndDlg, MYSQL_DROPDOWN, buffer, MAX_PATH);
                     if (config["mysql"] != std::string(buffer))
                     {
                         config["mysql"] = std::string(buffer);
@@ -911,14 +1273,14 @@ bool CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 }
                 break;
 
-                case 8:
+                case MYSQL_PORT_BTN:
                 {
                     configType = 2;
                     DialogBox(hInst, MAKEINTRESOURCE(DLG_CONF), hwndDlg, (DLGPROC)DlgConf);
                 }
                 break;
 
-                case 9:
+                case MYSQL_CONF_BTN:
                 {
                     std::thread(OpenConfigFile, appPath + "\\bin\\mysql\\" + config["mysql"] + "\\my_wpamp.ini").detach();
                 }
@@ -995,7 +1357,9 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 {
     hInst = hInstance;
 
-    // check another instasnce
+    // Load RichEdit library so CONTROL RichEdit20A can be instantiated
+    LoadLibraryA("riched20.dll");
+
     hMutexHandle = CreateMutex(NULL, TRUE, "wp.amp.instance");
     if (GetLastError() == ERROR_ALREADY_EXISTS)
     {
@@ -1003,12 +1367,10 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
         return 0;
     }
 
-    // set app path
     GetModuleFileName(NULL, buffer, MAX_PATH);
     std::string::size_type pos = std::string(buffer).find_last_of("\\/");
     appPath = std::string(buffer).substr(0, pos);
 
-    // read wpAMP.ini settings
     ReadWriteSettings();
 
     return DialogBox(hInst, MAKEINTRESOURCE(DLG_MAIN), NULL, (DLGPROC)DlgMain);
