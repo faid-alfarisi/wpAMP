@@ -27,6 +27,22 @@ Download Apache, PHP, and MySQL in ZIP format and place them in the `bin` folder
 
 ## Changelog
 
+### Version 1.4
+
+- **High-DPI Awareness & Modern Display Scaling:**
+  - Added modern `PerMonitorV2` DPI awareness in application manifest and initialized `SetProcessDpiAwarenessContext` in `WinMain`.
+  - Converted dialog resources from legacy `DIALOG` to modern `DIALOGEX` with `DS_SHELLFONT` and `FONT 9, "Segoe UI"`, allowing the Windows Dialog Manager to automatically scale dialog units (DLUs) to the active monitor DPI (125%, 150%, 200%, etc.).
+  - Added Windows 10 and Windows 11 OS compatibility declarations in `manifest.xml` to prevent OS compatibility throttling.
+  - Fixed combobox drop-down list height so available versions expand comfortably without being constrained.
+
+- **UI & Usability Enhancements:**
+  - Relocated utility action buttons (`Clear Log`, `Browse www`, `Terminal`) below the log box, creating a balanced and spacious layout with uniform 6-unit grid spacing.
+  - Synchronized control IDs (`0` through `13`) strictly matching their visual flow in `resource.rc`.
+  - Added real-time auto-scroll to bottom in log box (`WM_VSCROLL, SB_BOTTOM`), keeping newest output always in view.
+  - Automatically locks/disables version dropdowns and port configuration buttons when corresponding service is running to prevent runtime desynchronization.
+  - Enhanced `Terminal` environment: automatically generates/refreshes `php.ini` from `php_wpamp.ini`, sets `MYSQL_TCP_PORT` to the active port, and displays real-time service status (RUNNING / STOPPED) and binary versions.
+  - Enhanced lifecycle log messages to clearly indicate the exact service version (e.g. `Starting Server (php-8.3.20)`).
+
 ### Version 1.3
 
 - **Developer Utility Controls:**

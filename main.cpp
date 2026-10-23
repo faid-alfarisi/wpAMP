@@ -1361,6 +1361,18 @@ INT_PTR CALLBACK DlgMain(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
+    // Enable Per-Monitor v2 DPI awareness if supported (Windows 10 1703+)
+    typedef BOOL(WINAPI *SetProcessDpiAwarenessContextProc)(HANDLE);
+    HMODULE hUser32 = GetModuleHandleA("user32.dll");
+    if (hUser32)
+    {
+        SetProcessDpiAwarenessContextProc setDpi = (SetProcessDpiAwarenessContextProc)GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
+        if (setDpi)
+        {
+            setDpi((HANDLE)-4); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        }
+    }
+
     hInst = hInstance;
 
     // Load RichEdit library so CONTROL RichEdit20A can be instantiated
